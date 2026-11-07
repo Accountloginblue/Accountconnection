@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Stream P2P Direct & Contrôle</title>
+    <title>Stream Écran & Contrôle Direct</title>
     <style>
         html, body {
             margin: 0;
@@ -15,19 +15,12 @@
             justify-content: center;
             align-items: center;
         }
-        #remote-video {
+        #screen {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
-            object-fit: fill; 
+            object-fit: fill; /* Remplit tout l'écran pour aligner parfaitement les clics */
             z-index: 1;
-        }
-        #input-overlay {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            z-index: 2;
-            cursor: default;
         }
         #status {
             position: absolute;
@@ -44,85 +37,50 @@
 </head>
 <body>
 
-    <div id="status">Connexion au tunnel ngrok en cours...</div>
-    <!-- Attributs essentiels pour autoriser la lecture automatique de flux WebRTC -->
-    <video id="remote-video" autoplay playsinline muted></video>
-    <div id="input-overlay" tabindex="0"></div>
+    <div id="status">Connexion au tunnel ngrok...</div>
+    <img id="screen" alt="Flux d'écran distant">
 
     <script>
         const statusDiv = document.getElementById('status');
-        const videoElement = document.getElementById('remote-video');
-        const overlay = document.getElementById('input-overlay');
+        const screenImg = document.getElementById('screen');
         
-        overlay.focus();
-        document.addEventListener('click', () => overlay.focus());
-
+        // Votre domaine ngrok actuel
         const NGROK_DOMAIN = "trusting-irritate-pout.ngrok-free.dev";
+        const wsUrl = `wss://${NGROK_DOMAIN}/?ngrok-skip-browser-warning=true`;
 
-        let ws = null;
-        let pc = null;
+        const ws = new WebSocket(wsUrl);
 
-        function connectWebSocket() {
-            const wsUrl = `wss://${NGROK_DOMAIN}/?ngrok-skip-browser-warning=true`;
-            
-            statusDiv.innerText = "Ouverture du WebSocket ngrok...";
-            ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            statusDiv.innerText = "Connecté ! Chargement du flux...";
+        };
 
-            ws.onopen = () => {
-                statusDiv.innerText = "Tunnel ngrok connecté ! Initialisation WebRTC...";
-                startWebRTC();
-            };
+        ws.onerror = (err) => {
+            console.error("Erreur WebSocket :", err);
+            statusDiv.innerText = "Erreur de connexion au tunnel ngrok.";
+        };
 
-            ws.onerror = (err) => {
-                console.error("Erreur WebSocket ngrok :", err);
-                statusDiv.innerText = "Erreur de connexion au tunnel ngrok.";
-            };
-
-            ws.onmessage = async (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
-                        await pc.setRemoteDescription(new RTCSessionDescription(data));
-                        statusDiv.innerText = "Flux P2P actif !";
-                    }
-                } catch (e) {
-                    console.error("Erreur décodage message :", e);
+        ws.onmessage = (event) => {
+            try {
+                const message = JSON.parse(event.data);
+                if (message.type === "frame") {
+                    // Met à jour l'image en direct avec les données reçues
+                    screenImg.src = "data:image/jpeg;base64," + message.data;
+                    statusDiv.style.display = 'none'; // Masque le texte une fois l'image affichée
                 }
-            };
-        }
+            } catch (e) {
+                console.error("Erreur de décodage de l'image :", e);
+            }
+        };
 
-        async function startWebRTC() {
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            });
-
-            // Réception du flux distant
-            pc.ontrack = (event) => {
-                console.log("Piste vidéo reçue du PC distant !");
-                videoElement.srcObject = event.streams[0];
-                statusDiv.style.display = 'none';
-            };
-
-            // Force l'acceptation de la piste vidéo entrante
-            pc.addTransceiver('video', { direction: 'recvonly' });
-
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-
-            ws.send(JSON.stringify({
-                type: offer.type,
-                sdp: offer.sdp
-            }));
-        }
-
+        // --- Envoi des contrôles (Souris / Clavier) vers le PC ---
         function sendCommand(actionData) {
-            if (ws && ws.readyState === WebSocket.OPEN) {
+            if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(actionData));
             }
         }
 
-        overlay.addEventListener('click', (e) => {
-            const rect = overlay.getBoundingClientRect();
+        screenImg.addEventListener('click', (e) => {
+            const rect = screenImg.getBoundingClientRect();
             sendCommand({
                 action: 'click',
                 x: (e.clientX - rect.left) / rect.width,
@@ -141,8 +99,6 @@
                 e.preventDefault();
             }
         });
-
-        connectWebSocket();
     </script>
 </body>
 </html>
