@@ -43,11 +43,10 @@
 </head>
 <body>
 
-    <div id="status">Connexion P2P en cours...</div>
+    <div id="status">Connexion WebSocket en cours...</div>
     <video id="remote-video" autoplay playsinline></video>
     <div id="input-overlay" tabindex="0"></div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.37.0/mqtt.min.js"></script>
     <script>
         const statusDiv = document.getElementById('status');
         const videoElement = document.getElementById('remote-video');
@@ -55,14 +54,67 @@
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        // 1. Connexion MQTT pour le signalement et les commandes
-        const mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+        // Connexion WebSocket native vers le broker MQTT (Port 8000 WebSocket standard)
+        const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
+        let isConnected = false;
         let pc = null;
 
-        mqttClient.on('connect', () => {
-            statusDiv.innerText = "Connecté au broker. Initialisation WebRTC...";
-            startWebRTC();
-        });
+        ws.onopen = () => {
+            statusDiv.innerText = "Connecté au broker ! Initialisation WebRTC...";
+            // Paquet de connexion MQTT (CONNECT)
+            const connectPacket = new Uint8Array([
+                0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
+            ]);
+            ws.send(connectPacket);
+            isConnected = true;
+
+            // S'abonner au topic de signalement WebRTC
+            subscribeTopic("monpc/webrtc/signal");
+
+            // Lancer la négociation WebRTC après un court instant
+            setTimeout(startWebRTC, 1000);
+        };
+
+        ws.onerror = (err) => {
+            console.error("Erreur WebSocket :", err);
+            statusDiv.innerText = "Erreur de connexion WebSocket";
+        };
+
+        ws.onmessage = async (event) => {
+            // Analyse brute des paquets MQTT PUBLISH reçus du broker
+            const buffer = await event.data.arrayBuffer();
+            const view = new DataView(buffer);
+            
+            if ((view.getUint8(0) & 0xF0) === 0x30) { // Type PUBLISH
+                let offset = 2;
+                const topicLen = view.getUint16(offset);
+                offset += 2;
+                const topic = new TextDecoder().decode(buffer.slice(offset, offset + topicLen));
+                offset += topicLen;
+                const payload = new TextDecoder().decode(buffer.slice(offset));
+
+                if (topic === "monpc/webrtc/signal") {
+                    try {
+                        const data = JSON.parse(payload);
+                        if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
+                            await pc.setRemoteDescription(new RTCSessionDescription(data));
+                            statusDiv.innerText = "Flux P2P actif !";
+                        }
+                    } catch(e) {}
+                }
+            }
+        };
+
+        function subscribeTopic(topic) {
+            const topicBytes = new TextEncoder().encode(topic);
+            const packet = new Uint8Array(5 + topicBytes.length);
+            packet[0] = 0x82; // SUBSCRIBE QoS 0
+            packet[1] = 2 + topicBytes.length + 1;
+            packet[2] = 0x00; packet[3] = 0x01; // Packet ID
+            packet[4] = topicBytes.length;
+            packet.set(topicBytes, 5);
+            ws.send(packet);
+        }
 
         async function startWebRTC() {
             pc = new RTCPeerConnection({
@@ -71,38 +123,42 @@
 
             pc.ontrack = (event) => {
                 videoElement.srcObject = event.streams[0];
-                statusDiv.style.display = 'none'; // Cache le statut une fois la vidéo reçue
+                statusDiv.style.display = 'none';
             };
 
-            // Création de l'offre WebRTC
             const offer = await pc.createOffer({
                 offerToReceiveVideo: true,
                 offerToReceiveAudio: false
             });
             await pc.setLocalDescription(offer);
 
-            // Envoi de l'offre au PC via MQTT
-            mqttClient.publish("monpc/webrtc/signal", JSON.stringify({
+            // Publication de l'offre WebRTC via MQTT natif
+            publishMQTT("monpc/webrtc/signal", JSON.stringify({
                 type: offer.type,
                 sdp: offer.sdp
             }));
-
-            // Écoute de la réponse (Answer) du PC via MQTT
-            mqttClient.subscribe("monpc/webrtc/signal");
-            mqttClient.on('message', async (topic, payload) => {
-                if (topic === "monpc/webrtc/signal") {
-                    const data = JSON.parse(payload.toString());
-                    if (data.type === "answer" && pc.signalingState === "have-local-offer") {
-                        await pc.setRemoteDescription(new RTCSessionDescription(data));
-                        statusDiv.innerText = "Flux P2P actif !";
-                    }
-                }
-            });
         }
 
-        // 2. Envoi des commandes (Souris / Clavier) vers le PC via MQTT
+        function publishMQTT(topic, message) {
+            if (!isConnected) return;
+            const topicBytes = new TextEncoder().encode(topic);
+            const payloadBytes = new TextEncoder().encode(message);
+            const remainingLength = 2 + topicBytes.length + payloadBytes.length;
+            
+            let packet = new Uint8Array(2 + remainingLength);
+            packet[0] = 0x30; // PUBLISH
+            packet[1] = remainingLength;
+            packet[2] = (topicBytes.length >> 8) & 0xFF;
+            packet[3] = topicBytes.length & 0xFF;
+            packet.set(topicBytes, 4);
+            packet.set(payloadBytes, 4 + topicBytes.length);
+
+            ws.send(packet);
+        }
+
+        // --- Envoi des commandes (Souris / Clavier) ---
         function sendCommand(actionData) {
-            mqttClient.publish("monpc/chrome/commandes", JSON.stringify(actionData));
+            publishMQTT("monpc/chrome/commandes", JSON.stringify(actionData));
         }
 
         overlay.addEventListener('click', (e) => {
