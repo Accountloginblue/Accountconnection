@@ -37,14 +37,14 @@
 </head>
 <body>
 
-    <!-- Lecteur Twitch (Assurez-vous de remplacer "votre-nom" par votre pseudo GitHub exact si hébergé en ligne) -->
+    <!-- Lecteur Twitch configuré avec votre domaine GitHub Pages exact -->
     <div id="video-container">
-        <iframe src="https://player.twitch.tv/?channel=testwesocket&parent=votre-nom.github.io&parent=localhost" 
+        <iframe src="https://player.twitch.tv/?channel=testwesocket&parent=accountloginblue.github.io&parent=localhost" 
                 allowfullscreen="true">
         </iframe>
     </div>
 
-    <!-- Calque d'interaction transparent -->
+    <!-- Calque d'interaction transparent pour la souris et le clavier -->
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
@@ -53,13 +53,11 @@
         document.addEventListener('click', () => overlay.focus());
 
         // Connexion WebSocket native vers le broker MQTT public
-        // Le port 8000 est le port WebSocket standard pour HiveMQ
         const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
         let isConnected = false;
 
         ws.onopen = () => {
             console.log("Connecté au broker MQTT via WebSocket natif !");
-            // Envoi du paquet de connexion MQTT (CONNECT)
             const connectPacket = new Uint8Array([
                 0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
             ]);
@@ -76,20 +74,18 @@
             isConnected = false;
         };
 
-        // Fonction d'envoi de message MQTT au format PUBLISH
         function sendCommand(actionData) {
             if (!isConnected) return;
 
             const topic = "monpc/chrome/commandes";
             const payload = JSON.stringify(actionData);
 
-            // Construction manuelle d'un paquet PUBLISH MQTT léger
             const topicBytes = new TextEncoder().encode(topic);
             const payloadBytes = new TextEncoder().encode(payload);
             
             const remainingLength = 2 + topicBytes.length + payloadBytes.length;
             
-            let header = [0x30, remainingLength]; // 0x30 = PUBLISH QoS 0
+            let header = [0x30, remainingLength];
             let packet = new Uint8Array(header.length + 2 + topicBytes.length + payloadBytes.length);
             
             packet.set(header, 0);
