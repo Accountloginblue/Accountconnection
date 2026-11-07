@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Stream & Contrôle - Direct</title>
+    <title>Stream P2P Direct & Contrôle</title>
     <style>
         html, body {
             margin: 0;
@@ -15,7 +15,6 @@
             justify-content: center;
             align-items: center;
         }
-        /* Lecteur vidéo plein écran sans aucune surcouche */
         #remote-video {
             position: absolute;
             top: 0; left: 0;
@@ -23,7 +22,6 @@
             object-fit: contain;
             z-index: 1;
         }
-        /* Calque transparent pour capturer les clics et le clavier */
         #input-overlay {
             position: absolute;
             top: 0; left: 0;
@@ -31,109 +29,96 @@
             z-index: 2;
             cursor: default;
         }
+        #status {
+            position: absolute;
+            top: 10px; left: 10px;
+            color: #00ff00;
+            font-family: monospace;
+            z-index: 3;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
 
-    <!-- Flux vidéo WHEP (MediaMTX) -->
-    <video id="remote-video" autoplay playsinline muted></video>
-
-    <!-- Calque d'interaction -->
+    <div id="status">Connexion P2P en cours...</div>
+    <video id="remote-video" autoplay playsinline></video>
     <div id="input-overlay" tabindex="0"></div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.37.0/mqtt.min.js"></script>
     <script>
-        // --- 1. LECTURE VIDÉO WEBTRC (WHEP) ---
-        async function startWHEPStream() {
-            const video = document.getElementById('remote-video');
-            const pc = new RTCPeerConnection({
+        const statusDiv = document.getElementById('status');
+        const videoElement = document.getElementById('remote-video');
+        const overlay = document.getElementById('input-overlay');
+        overlay.focus();
+        document.addEventListener('click', () => overlay.focus());
+
+        // 1. Connexion MQTT pour le signalement et les commandes
+        const mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+        let pc = null;
+
+        mqttClient.on('connect', () => {
+            statusDiv.innerText = "Connecté au broker. Initialisation WebRTC...";
+            startWebRTC();
+        });
+
+        async function startWebRTC() {
+            pc = new RTCPeerConnection({
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             });
 
-            pc.addTransceiver('video', { direction: 'recvonly' });
-            pc.addTransceiver('audio', { direction: 'recvonly' });
-
             pc.ontrack = (event) => {
-                video.srcObject = event.streams[0];
+                videoElement.srcObject = event.streams[0];
+                statusDiv.style.display = 'none'; // Cache le statut une fois la vidéo reçue
             };
 
-            const offer = await pc.createOffer();
+            // Création de l'offre WebRTC
+            const offer = await pc.createOffer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: false
+            });
             await pc.setLocalDescription(offer);
 
-            // Remplacez cette URL par l'adresse de votre serveur MediaMTX (ex: Fly.io, Render ou VPS)
-            try {
-                const response = await fetch('https://votre-serveur-mediamtx.com/mystream/whep', {
-                    method: 'POST',
-                    body: offer.sdp,
-                    headers: { 'Content-Type': 'application/sdp' }
-                });
+            // Envoi de l'offre au PC via MQTT
+            mqttClient.publish("monpc/webrtc/signal", JSON.stringify({
+                type: offer.type,
+                sdp: offer.sdp
+            }));
 
-                const answerSdp = await response.text();
-                await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-            } catch (err) {
-                console.error("Erreur de connexion au flux vidéo :", err);
-            }
+            // Écoute de la réponse (Answer) du PC via MQTT
+            mqttClient.subscribe("monpc/webrtc/signal");
+            mqttClient.on('message', async (topic, payload) => {
+                if (topic === "monpc/webrtc/signal") {
+                    const data = JSON.parse(payload.toString());
+                    if (data.type === "answer" && pc.signalingState === "have-local-offer") {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data));
+                        statusDiv.innerText = "Flux P2P actif !";
+                    }
+                }
+            });
         }
 
-        startWHEPStream();
-
-        // --- 2. CONTRÔLE MQTT (WebSocket Natif) ---
-        const overlay = document.getElementById('input-overlay');
-        overlay.focus();
-        document.addEventListener('click', () => {
-            overlay.focus();
-            // Active l'audio de la vidéo au premier clic utilisateur (règle des navigateurs)
-            const vid = document.getElementById('remote-video');
-            if (vid.muted) vid.muted = false;
-        });
-
-        const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
-        let isConnected = false;
-
-        ws.onopen = () => {
-            console.log("Connecté au broker MQTT !");
-            const connectPacket = new Uint8Array([
-                0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
-            ]);
-            ws.send(connectPacket);
-            isConnected = true;
-        };
-
+        // 2. Envoi des commandes (Souris / Clavier) vers le PC via MQTT
         function sendCommand(actionData) {
-            if (!isConnected) return;
-            const topic = "monpc/chrome/commandes";
-            const payload = JSON.stringify(actionData);
-
-            const topicBytes = new TextEncoder().encode(topic);
-            const payloadBytes = new TextEncoder().encode(payload);
-            const remainingLength = 2 + topicBytes.length + payloadBytes.length;
-            
-            let header = [0x30, remainingLength];
-            let packet = new Uint8Array(header.length + 2 + topicBytes.length + payloadBytes.length);
-            
-            packet.set(header, 0);
-            packet[2] = (topicBytes.length >> 8) & 0xFF;
-            packet[3] = topicBytes.length & 0xFF;
-            packet.set(topicBytes, 4);
-            packet.set(payloadBytes, 4 + topicBytes.length);
-
-            ws.send(packet);
+            mqttClient.publish("monpc/chrome/commandes", JSON.stringify(actionData));
         }
 
-        // Clics de souris en pourcentages
         overlay.addEventListener('click', (e) => {
             const rect = overlay.getBoundingClientRect();
-            const xPercent = (e.clientX - rect.left) / rect.width;
-            const yPercent = (e.clientY - rect.top) / rect.height;
-            sendCommand({ action: 'click', x: xPercent, y: yPercent });
+            sendCommand({
+                action: 'click',
+                x: (e.clientX - rect.left) / rect.width,
+                y: (e.clientY - rect.top) / rect.height
+            });
         });
 
-        // Molette (Scroll)
         window.addEventListener('wheel', (e) => {
             sendCommand({ action: 'scroll', deltaY: e.deltaY });
             e.preventDefault();
         }, { passive: false });
 
-        // Clavier
         window.addEventListener('keydown', (e) => {
             if (e.key.length === 1 || ["Backspace", "Enter", "Space", "Tab"].includes(e.key)) {
                 sendCommand({ action: 'keypress', key: e.key });
