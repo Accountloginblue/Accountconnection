@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Stream P2P Instantané</title>
+    <title>Stream P2P Direct & Contrôle</title>
     <style>
         html, body {
             margin: 0;
@@ -11,6 +11,9 @@
             height: 100vh;
             background-color: #000;
             overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
         }
         #remote-video {
             position: absolute;
@@ -26,78 +29,47 @@
             z-index: 2;
             cursor: default;
         }
+        #status {
+            position: absolute;
+            top: 10px; left: 10px;
+            color: #00ff00;
+            font-family: monospace;
+            z-index: 3;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
 
+    <div id="status">Connexion au tunnel...</div>
     <video id="remote-video" autoplay playsinline></video>
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
+        const statusDiv = document.getElementById('status');
         const videoElement = document.getElementById('remote-video');
         const overlay = document.getElementById('input-overlay');
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        // Connexion WebSocket native vers le broker (Port WebSocket standard)
-        const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
-        let isConnected = false;
+        // 💡 REMplacez "votre-url-ngrok.ngrok-free.app" par l'URL générée par ngrok (SANS "https://")
+        const NGORK_URL = "votre-url-ngrok.ngrok-free.app";
+        const ws = new WebSocket(`wss://${NGORK_URL}`);
+        
         let pc = null;
 
         ws.onopen = () => {
-            console.log("Connecté au broker MQTT via WebSocket natif !");
-            // Paquet de connexion MQTT (CONNECT)
-            const connectPacket = new Uint8Array([
-                0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
-            ]);
-            ws.send(connectPacket);
-            isConnected = true;
-
-            // S'abonner au topic de signalement
-            subscribeTopic("monpc/webrtc/signal");
-
-            // Lancer l'offre WebRTC
-            setTimeout(startWebRTC, 500);
+            statusDiv.innerText = "Connecté ! Initialisation WebRTC...";
+            startWebRTC();
         };
 
         ws.onerror = (err) => {
             console.error("Erreur WebSocket :", err);
+            statusDiv.innerText = "Erreur de connexion au tunnel ngrok";
         };
-
-        ws.onmessage = async (event) => {
-            const buffer = await event.data.arrayBuffer();
-            const view = new DataView(buffer);
-            
-            if ((view.getUint8(0) & 0xF0) === 0x30) { // Type PUBLISH
-                let offset = 2;
-                const topicLen = view.getUint16(offset);
-                offset += 2;
-                const topic = new TextDecoder().decode(buffer.slice(offset, offset + topicLen));
-                offset += topicLen;
-                const payload = new TextDecoder().decode(buffer.slice(offset));
-
-                if (topic === "monpc/webrtc/signal") {
-                    try {
-                        const data = JSON.parse(payload);
-                        if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
-                            await pc.setRemoteDescription(new RTCSessionDescription(data));
-                            console.log("Flux vidéo actif !");
-                        }
-                    } catch (e) {}
-                }
-            }
-        };
-
-        function subscribeTopic(topic) {
-            const topicBytes = new TextEncoder().encode(topic);
-            const packet = new Uint8Array(5 + topicBytes.length);
-            packet[0] = 0x82; // SUBSCRIBE QoS 0
-            packet[1] = 2 + topicBytes.length + 1;
-            packet[2] = 0x00; packet[3] = 0x01; // Packet ID
-            packet[4] = topicBytes.length;
-            packet.set(topicBytes, 5);
-            ws.send(packet);
-        }
 
         async function startWebRTC() {
             pc = new RTCPeerConnection({
@@ -106,6 +78,7 @@
 
             pc.ontrack = (event) => {
                 videoElement.srcObject = event.streams[0];
+                statusDiv.style.display = 'none'; // Masque le statut une fois la vidéo reçue
             };
 
             const offer = await pc.createOffer({
@@ -114,32 +87,32 @@
             });
             await pc.setLocalDescription(offer);
 
-            publishMQTT("monpc/webrtc/signal", JSON.stringify({
+            // Envoi de l'offre WebRTC au script Python via le WebSocket ngrok
+            ws.send(JSON.stringify({
                 type: offer.type,
                 sdp: offer.sdp
             }));
         }
 
-        function publishMQTT(topic, message) {
-            if (!isConnected) return;
-            const topicBytes = new TextEncoder().encode(topic);
-            const payloadBytes = new TextEncoder().encode(message);
-            const remainingLength = 2 + topicBytes.length + payloadBytes.length;
-            
-            let packet = new Uint8Array(2 + remainingLength);
-            packet[0] = 0x30; // PUBLISH
-            packet[1] = remainingLength;
-            packet[2] = (topicBytes.length >> 8) & 0xFF;
-            packet[3] = topicBytes.length & 0xFF;
-            packet.set(topicBytes, 4);
-            packet.set(payloadBytes, 4 + topicBytes.length);
+        // Réception de la réponse (Answer) du script Python
+        ws.onmessage = async (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data));
+                    statusDiv.innerText = "Flux P2P actif !";
+                    setTimeout(() => statusDiv.style.display = 'none', 1000);
+                }
+            } catch (e) {
+                console.error("Erreur de traitement du message :", e);
+            }
+        };
 
-            ws.send(packet);
-        }
-
-        // --- Envoi des commandes (Souris / Clavier) ---
+        // --- Envoi des commandes (Souris / Clavier) vers le PC ---
         function sendCommand(actionData) {
-            publishMQTT("monpc/chrome/commandes", JSON.stringify(actionData));
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(actionData));
+            }
         }
 
         overlay.addEventListener('click', (e) => {
