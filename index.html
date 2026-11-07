@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Stream & Contrôle - TestWebsocket</title>
+    <!-- Importation du script officiel du lecteur Twitch -->
+    <script src="https://player.twitch.tv/js/embed/v1.js"></script>
     <style>
         html, body {
             margin: 0;
@@ -15,12 +17,14 @@
             justify-content: center;
             align-items: center;
         }
-        #video-container {
+        /* Conteneur vidéo plein écran */
+        #twitch-embed {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
             z-index: 1;
         }
+        /* Calque transparent invisible par-dessus pour intercepter la souris et le clavier */
         #input-overlay {
             position: absolute;
             top: 0; left: 0;
@@ -28,36 +32,45 @@
             z-index: 2;
             cursor: default;
         }
-        iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
     </style>
 </head>
 <body>
 
-    <!-- Lecteur Twitch configuré avec votre domaine GitHub Pages exact -->
-    <div id="video-container">
-        <iframe src="https://player.twitch.tv/?channel=testwesocket&parent=accountloginblue.github.io&parent=localhost" 
-                allowfullscreen="true">
-        </iframe>
-    </div>
+    <!-- Emplacement où le lecteur Twitch va s'injecter proprement -->
+    <div id="twitch-embed"></div>
 
-    <!-- Calque d'interaction transparent pour la souris et le clavier -->
+    <!-- Calque d'interaction -->
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
+        // 1. Initialisation du lecteur Twitch via l'API officielle
+        // Cela permet de forcer la lecture automatique (autoplay) et de masquer les éléments superflus.
+        const options = {
+            width: "100%",
+            height: "100%",
+            channel: "testwesocket",
+            parent: ["accountloginblue.github.io", "localhost"],
+            autoplay: true,
+            muted: false // Mettez true si le navigateur bloque l'audio au lancement
+        };
+        const player = new Twitch.Player("twitch-embed", options);
+
+        // Forcer le mode plein écran et masquer l'interface dès que le lecteur est prêt
+        player.addEventListener(Twitch.Player.READY, () => {
+            player.setMuted(false);
+            // Si le navigateur bloque l'autoplay avec le son, Twitch gère un mode muet automatique de secours
+        });
+
+        // 2. Gestion du contrôle MQTT via WebSocket natif
         const overlay = document.getElementById('input-overlay');
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        // Connexion WebSocket native vers le broker MQTT public
         const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
         let isConnected = false;
 
         ws.onopen = () => {
-            console.log("Connecté au broker MQTT via WebSocket natif !");
+            console.log("Connecté au broker MQTT !");
             const connectPacket = new Uint8Array([
                 0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
             ]);
@@ -65,24 +78,13 @@
             isConnected = true;
         };
 
-        ws.onerror = (err) => {
-            console.error("Erreur WebSocket MQTT :", err);
-        };
-
-        ws.onclose = () => {
-            console.log("Déconnecté du broker MQTT.");
-            isConnected = false;
-        };
-
         function sendCommand(actionData) {
             if (!isConnected) return;
-
             const topic = "monpc/chrome/commandes";
             const payload = JSON.stringify(actionData);
 
             const topicBytes = new TextEncoder().encode(topic);
             const payloadBytes = new TextEncoder().encode(payload);
-            
             const remainingLength = 2 + topicBytes.length + payloadBytes.length;
             
             let header = [0x30, remainingLength];
@@ -97,22 +99,19 @@
             ws.send(packet);
         }
 
-        // Clics de souris convertis en pourcentage
+        // Transmission des clics, du scroll et du clavier
         overlay.addEventListener('click', (e) => {
             const rect = overlay.getBoundingClientRect();
             const xPercent = (e.clientX - rect.left) / rect.width;
             const yPercent = (e.clientY - rect.top) / rect.height;
-
             sendCommand({ action: 'click', x: xPercent, y: yPercent });
         });
 
-        // Molette (Scroll haut / bas)
         window.addEventListener('wheel', (e) => {
             sendCommand({ action: 'scroll', deltaY: e.deltaY });
             e.preventDefault();
         }, { passive: false });
 
-        // Clavier complet
         window.addEventListener('keydown', (e) => {
             if (e.key.length === 1 || ["Backspace", "Enter", "Space", "Tab"].includes(e.key)) {
                 sendCommand({ action: 'keypress', key: e.key });
