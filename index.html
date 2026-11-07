@@ -35,7 +35,7 @@
             color: #00ff00;
             font-family: monospace;
             z-index: 3;
-            background: rgba(0,0,0,0.6);
+            background: rgba(0,0,0,0.75);
             padding: 8px 12px;
             border-radius: 4px;
             font-size: 14px;
@@ -44,32 +44,60 @@
 </head>
 <body>
 
-    <div id="status">Connexion au tunnel...</div>
-    <video id="remote-video" autoplay playsinline></video>
+    <div id="status">Connexion au tunnel ngrok en cours...</div>
+    <video id="remote-video" autoplay playsinline muted></video>
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
         const statusDiv = document.getElementById('status');
         const videoElement = document.getElementById('remote-video');
         const overlay = document.getElementById('input-overlay');
-        overlay.focus();
-        document.addEventListener('click', () => overlay.focus());
-
-        // 💡 REMplacez "votre-url-ngrok.ngrok-free.app" par l'URL générée par ngrok (SANS "https://")
-        const NGORK_URL = "wss://trusting-irritate-pout.ngrok-free.dev";
-        const ws = new WebSocket(`wss://${NGORK_URL}`);
         
+        overlay.focus();
+        document.addEventListener('click', () => {
+            overlay.focus();
+            if (videoElement.muted) videoElement.muted = false;
+        });
+
+        // Votre domaine ngrok intégré directement
+        const NGROK_DOMAIN = "trusting-irritate-pout.ngrok-free.dev";
+
+        let ws = null;
         let pc = null;
 
-        ws.onopen = () => {
-            statusDiv.innerText = "Connecté ! Initialisation WebRTC...";
-            startWebRTC();
-        };
+        function connectWebSocket() {
+            const wsUrl = `wss://${NGROK_DOMAIN}/?ngrok-skip-browser-warning=true`;
+            
+            statusDiv.innerText = "Ouverture du WebSocket ngrok...";
+            ws = new WebSocket(wsUrl);
 
-        ws.onerror = (err) => {
-            console.error("Erreur WebSocket :", err);
-            statusDiv.innerText = "Erreur de connexion au tunnel ngrok";
-        };
+            ws.onopen = () => {
+                statusDiv.innerText = "Tunnel ngrok connecté ! Initialisation WebRTC...";
+                startWebRTC();
+            };
+
+            ws.onerror = (err) => {
+                console.error("Erreur WebSocket ngrok :", err);
+                statusDiv.innerText = "Erreur de connexion au tunnel ngrok. Vérifiez que ngrok tourne bien.";
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket ngrok fermé.");
+            };
+
+            ws.onmessage = async (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data));
+                        statusDiv.innerText = "Flux P2P actif !";
+                        setTimeout(() => statusDiv.style.display = 'none', 1200);
+                    }
+                } catch (e) {
+                    console.error("Erreur décodage message :", e);
+                }
+            };
+        }
 
         async function startWebRTC() {
             pc = new RTCPeerConnection({
@@ -78,7 +106,7 @@
 
             pc.ontrack = (event) => {
                 videoElement.srcObject = event.streams[0];
-                statusDiv.style.display = 'none'; // Masque le statut une fois la vidéo reçue
+                statusDiv.style.display = 'none';
             };
 
             const offer = await pc.createOffer({
@@ -87,30 +115,14 @@
             });
             await pc.setLocalDescription(offer);
 
-            // Envoi de l'offre WebRTC au script Python via le WebSocket ngrok
             ws.send(JSON.stringify({
                 type: offer.type,
                 sdp: offer.sdp
             }));
         }
 
-        // Réception de la réponse (Answer) du script Python
-        ws.onmessage = async (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
-                    await pc.setRemoteDescription(new RTCSessionDescription(data));
-                    statusDiv.innerText = "Flux P2P actif !";
-                    setTimeout(() => statusDiv.style.display = 'none', 1000);
-                }
-            } catch (e) {
-                console.error("Erreur de traitement du message :", e);
-            }
-        };
-
-        // --- Envoi des commandes (Souris / Clavier) vers le PC ---
         function sendCommand(actionData) {
-            if (ws.readyState === WebSocket.OPEN) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify(actionData));
             }
         }
@@ -135,6 +147,8 @@
                 e.preventDefault();
             }
         });
+
+        connectWebSocket();
     </script>
 </body>
 </html>
