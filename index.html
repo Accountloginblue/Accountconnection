@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Stream & Contrôle - TestWebsocket</title>
-    <!-- Utilisation du CDN MQTT moderne et robuste -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.37.0/mqtt.min.js"></script>
     <style>
         html, body {
             margin: 0;
@@ -39,15 +37,14 @@
 </head>
 <body>
 
-    <!-- Lecteur Twitch configuré avec votre chaîne et votre domaine parent GitHub Pages -->
+    <!-- Lecteur Twitch (Assurez-vous de remplacer "votre-nom" par votre pseudo GitHub exact si hébergé en ligne) -->
     <div id="video-container">
-        <!-- 💡 Remplacez "votre-nom" par votre pseudo GitHub exact -->
         <iframe src="https://player.twitch.tv/?channel=testwesocket&parent=votre-nom.github.io&parent=localhost" 
                 allowfullscreen="true">
         </iframe>
     </div>
 
-    <!-- Calque d'interaction transparent par-dessus la vidéo -->
+    <!-- Calque d'interaction transparent -->
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
@@ -55,24 +52,53 @@
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        // Connexion MQTT via WebSocket sécurisé (WSS)
-        const clientId = "web_control_" + Math.random().toString(16).substr(2, 8);
-        const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
-            clientId: clientId
-        });
+        // Connexion WebSocket native vers le broker MQTT public
+        // Le port 8000 est le port WebSocket standard pour HiveMQ
+        const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
+        let isConnected = false;
 
-        client.on('connect', () => {
-            console.log("Connecté au broker MQTT avec succès !");
-        });
+        ws.onopen = () => {
+            console.log("Connecté au broker MQTT via WebSocket natif !");
+            // Envoi du paquet de connexion MQTT (CONNECT)
+            const connectPacket = new Uint8Array([
+                0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
+            ]);
+            ws.send(connectPacket);
+            isConnected = true;
+        };
 
-        client.on('error', (err) => {
-            console.error("Erreur MQTT :", err);
-        });
+        ws.onerror = (err) => {
+            console.error("Erreur WebSocket MQTT :", err);
+        };
 
-        // Fonction d'envoi d'ordres vers votre PC
+        ws.onclose = () => {
+            console.log("Déconnecté du broker MQTT.");
+            isConnected = false;
+        };
+
+        // Fonction d'envoi de message MQTT au format PUBLISH
         function sendCommand(actionData) {
-            if (!client.connected) return;
-            client.publish("monpc/chrome/commandes", JSON.stringify(actionData));
+            if (!isConnected) return;
+
+            const topic = "monpc/chrome/commandes";
+            const payload = JSON.stringify(actionData);
+
+            // Construction manuelle d'un paquet PUBLISH MQTT léger
+            const topicBytes = new TextEncoder().encode(topic);
+            const payloadBytes = new TextEncoder().encode(payload);
+            
+            const remainingLength = 2 + topicBytes.length + payloadBytes.length;
+            
+            let header = [0x30, remainingLength]; // 0x30 = PUBLISH QoS 0
+            let packet = new Uint8Array(header.length + 2 + topicBytes.length + payloadBytes.length);
+            
+            packet.set(header, 0);
+            packet[2] = (topicBytes.length >> 8) & 0xFF;
+            packet[3] = topicBytes.length & 0xFF;
+            packet.set(topicBytes, 4);
+            packet.set(payloadBytes, 4 + topicBytes.length);
+
+            ws.send(packet);
         }
 
         // Clics de souris convertis en pourcentage
@@ -90,7 +116,7 @@
             e.preventDefault();
         }, { passive: false });
 
-        // Clavier (écriture, touches spéciales)
+        // Clavier complet
         window.addEventListener('keydown', (e) => {
             if (e.key.length === 1 || ["Backspace", "Enter", "Space", "Tab"].includes(e.key)) {
                 sendCommand({ action: 'keypress', key: e.key });
