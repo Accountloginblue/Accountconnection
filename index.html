@@ -3,52 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bureau Virtuel Immersif</title>
+    <title>Bureau Virtuel Cloud</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body, html {
             width: 100vw; height: 100vh;
             background: #000; overflow: hidden;
-            cursor: none; /* Masque le curseur pour l'immersion totale */
+            cursor: none; /* Masque le curseur pour une immersion totale */
         }
         video {
             width: 100%; height: 100%;
             object-fit: contain; background: #000;
         }
-        /* Écran d'accueil minimaliste pour valider la règle de sécurité du navigateur */
         #welcome-screen {
             position: fixed; top: 0; left: 0;
             width: 100vw; height: 100vh;
-            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%);
-            display: flex; flex-direction: column;
-            justify-content: center; align-items: center;
-            color: #fff; z-index: 10000;
-            font-family: system-ui, -apple-system, sans-serif;
-            cursor: default;
-            transition: opacity 0.5s ease;
+            background: #0f0f19; display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: #fff; z-index: 10000; font-family: system-ui, sans-serif;
+            cursor: default; transition: opacity 0.4s ease;
         }
         .btn-launch {
             background: #6366f1; color: white; border: none;
             padding: 16px 32px; border-radius: 8px; cursor: pointer;
             font-size: 18px; font-weight: bold;
-            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
-            transition: transform 0.2s, background 0.2s;
         }
-        .btn-launch:hover { background: #4f46e5; transform: scale(1.05); }
-        .hint { margin-top: 15px; font-size: 13px; color: #888; }
+        .btn-launch:hover { background: #4f46e5; }
     </style>
 </head>
 <body>
 
-    <!-- Écran d'activation unique -->
     <div id="welcome-screen">
-        <h1 style="margin-bottom: 10px; font-weight: 400; letter-spacing: 1px;">Environnement Distant</h1>
-        <p style="color: #aaa; margin-bottom: 30px; font-size: 14px;">Sécurisé via ngrok & Python</p>
-        <button class="btn-launch" id="start-btn">Connexion au Bureau</button>
-        <div class="hint">Appuyez sur Ctrl + Shift + Q à tout moment pour afficher les options.</div>
+        <h1 style="margin-bottom: 15px;">Connexion au Bureau Cloud</h1>
+        <button class="btn-launch" id="start-btn">Démarrer le flux</button>
+        <p style="margin-top: 15px; font-size: 13px; color: #888;">Ctrl + Shift + Q pour afficher le menu</p>
     </div>
 
-    <!-- Flux vidéo distant -->
     <video id="remote-video" autoplay playsinline></video>
 
     <script>
@@ -56,42 +46,37 @@
         const welcomeScreen = document.getElementById('welcome-screen');
         const startBtn = document.getElementById('start-btn');
 
-        const SERVER_URL = "https://trusting-irritate-pout.ngrok-free.dev/control";
+        // URL de votre script Python exposée via ngrok
+        const CONTROL_URL = "https://xxxx-xxxx.ngrok-free.app/control";
 
-        // Fonction d'envoi des actions HTTP vers Python
         function sendAction(data) {
             if (welcomeScreen.style.display !== 'none') return;
-            
-            fetch(SERVER_URL, {
+            fetch(CONTROL_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             }).catch(err => console.error("Erreur de transmission :", err));
         }
 
-        // Lancement immédiat du flux au clic sur le bouton d'accueil
         startBtn.addEventListener('click', async () => {
             try {
-                // Demande de capture du flux OBS ou de la fenêtre
-                const stream = await navigator.mediaDevices.getDisplayMedia({
-                    video: { cursor: "always" },
-                    audio: true
-                });
+                // Connexion au flux WebRTC du serveur relais cloud
+                const pc = new RTCPeerConnection();
+                pc.ontrack = (event) => {
+                    video.srcObject = event.streams[0];
+                };
                 
-                video.srcObject = stream;
+                // Simulation / Connexion au flux distant (via l'offre WebRTC du serveur relais)
+                // Note : Vous pouvez aussi utiliser une balise source standard si le relais fournit du HLS/WebRTC direct.
                 
-                // Disparition fluide de l'écran d'accueil
                 welcomeScreen.style.opacity = '0';
-                setTimeout(() => {
-                    welcomeScreen.style.display = 'none';
-                }, 500);
-
+                setTimeout(() => welcomeScreen.style.display = 'none', 400);
             } catch (err) {
-                console.error("Partage annulé ou refusé :", err);
+                console.error("Erreur de lecture du flux :", err);
             }
         });
 
-        // Gestion des événements clavier, souris et molette
+        // Commandes Clavier & Souris
         window.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'q') {
                 welcomeScreen.style.display = 'flex';
