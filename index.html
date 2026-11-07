@@ -59,40 +59,54 @@
 
         const TARGET_PEER_ID = "monpc_chrome_stream_unique_123";
 
-        // Initialisation de PeerJS sur le cloud public gratuit
+        // Initialisation de PeerJS
         const peer = new Peer();
         let conn = null;
-        let pc = null;
 
         peer.on('open', (id) => {
             statusDiv.innerText = "Connecté à PeerJS. Connexion au PC...";
-            connectToPC();
+            
+            // Petit délai pour s'assurer que tout est stable avant l'appel
+            setTimeout(() => {
+                connectToPC();
+            }, 1000);
         });
 
         peer.on('error', (err) => {
             console.error("Erreur PeerJS:", err);
-            statusDiv.innerText = "Erreur de connexion P2P";
+            statusDiv.innerText = "Erreur P2P: " + err.type;
         });
 
-        function connectToPC() {
-            // Création d'une connexion WebRTC avec le PC cible
-            const call = peer.call(TARGET_PEER_ID, new MediaStream()); // Signal d'appel vidéo
+        async function connectToPC() {
+            statusDiv.innerText = "Création du flux vidéo...";
             
-            // Établissement du DataChannel pour envoyer les clics/clavier instantanément
-            conn = peer.connect(TARGET_PEER_ID);
+            // Création de l'appel WebRTC vers le script Python
+            const call = peer.call(TARGET_PEER_ID, new MediaStream());
+            
+            if (!call) {
+                statusDiv.innerText = "Erreur: Impossible de joindre le PC";
+                return;
+            }
 
-            conn.on('open', () => {
-                statusDiv.innerText = "Canal de contrôle établi !";
+            call.on('stream', (remoteStream) => {
+                statusDiv.innerText = "Flux actif !";
+                videoElement.srcObject = remoteStream;
+                setTimeout(() => statusDiv.style.display = 'none', 1000);
             });
 
-            // Réception du flux vidéo du PC
-            call.on('stream', (remoteStream) => {
-                videoElement.srcObject = remoteStream;
-                statusDiv.style.display = 'none';
+            call.on('error', (err) => {
+                console.error("Erreur de flux:", err);
+                statusDiv.innerText = "Erreur de flux vidéo";
+            });
+
+            // Établissement du canal de données pour les clics et le clavier
+            conn = peer.connect(TARGET_PEER_ID);
+            conn.on('open', () => {
+                console.log("Canal de contrôle (DataChannel) ouvert !");
             });
         }
 
-        // --- Envoi des commandes (Souris / Clavier) via le canal P2P direct ---
+        // --- Envoi des commandes (Souris / Clavier) ---
         function sendCommand(actionData) {
             if (conn && conn.open) {
                 conn.send(JSON.stringify(actionData));
