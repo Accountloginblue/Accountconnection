@@ -2,8 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Stream P2P Direct & Contrôle</title>
-    <!-- Inclusion de la bibliothèque PeerJS officielle -->
+    <title>Stream P2P Instantané</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         html, body {
@@ -13,9 +12,6 @@
             height: 100vh;
             background-color: #000;
             overflow: hidden;
-            display: flex;
-            justify-content: center;
-            align-items: center;
         }
         #remote-video {
             position: absolute;
@@ -31,82 +27,34 @@
             z-index: 2;
             cursor: default;
         }
-        #status {
-            position: absolute;
-            top: 10px; left: 10px;
-            color: #00ff00;
-            font-family: monospace;
-            z-index: 3;
-            background: rgba(0,0,0,0.7);
-            padding: 8px 12px;
-            border-radius: 4px;
-            font-size: 14px;
-        }
     </style>
 </head>
 <body>
 
-    <div id="status">Initialisation PeerJS...</div>
     <video id="remote-video" autoplay playsinline></video>
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
-        const statusDiv = document.getElementById('status');
         const videoElement = document.getElementById('remote-video');
         const overlay = document.getElementById('input-overlay');
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
         const TARGET_PEER_ID = "monpc_chrome_stream_unique_123";
-
-        // Initialisation de PeerJS
         const peer = new Peer();
         let conn = null;
 
-        peer.on('open', (id) => {
-            statusDiv.innerText = "Connecté à PeerJS. Connexion au PC...";
-            
-            // Petit délai pour s'assurer que tout est stable avant l'appel
-            setTimeout(() => {
-                connectToPC();
-            }, 1000);
-        });
-
-        peer.on('error', (err) => {
-            console.error("Erreur PeerJS:", err);
-            statusDiv.innerText = "Erreur P2P: " + err.type;
-        });
-
-        async function connectToPC() {
-            statusDiv.innerText = "Création du flux vidéo...";
-            
-            // Création de l'appel WebRTC vers le script Python
+        peer.on('open', () => {
+            // Lancement immédiat dès l'ouverture de la page
             const call = peer.call(TARGET_PEER_ID, new MediaStream());
             
-            if (!call) {
-                statusDiv.innerText = "Erreur: Impossible de joindre le PC";
-                return;
-            }
-
             call.on('stream', (remoteStream) => {
-                statusDiv.innerText = "Flux actif !";
                 videoElement.srcObject = remoteStream;
-                setTimeout(() => statusDiv.style.display = 'none', 1000);
             });
 
-            call.on('error', (err) => {
-                console.error("Erreur de flux:", err);
-                statusDiv.innerText = "Erreur de flux vidéo";
-            });
-
-            // Établissement du canal de données pour les clics et le clavier
             conn = peer.connect(TARGET_PEER_ID);
-            conn.on('open', () => {
-                console.log("Canal de contrôle (DataChannel) ouvert !");
-            });
-        }
+        });
 
-        // --- Envoi des commandes (Souris / Clavier) ---
         function sendCommand(actionData) {
             if (conn && conn.open) {
                 conn.send(JSON.stringify(actionData));
