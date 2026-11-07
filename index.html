@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Stream P2P Direct & Contrôle</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.37.0/mqtt.min.js"></script>
+    <!-- Inclusion de la bibliothèque PeerJS officielle -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         html, body {
             margin: 0;
@@ -36,7 +37,7 @@
             color: #00ff00;
             font-family: monospace;
             z-index: 3;
-            background: rgba(0,0,0,0.6);
+            background: rgba(0,0,0,0.7);
             padding: 8px 12px;
             border-radius: 4px;
             font-size: 14px;
@@ -45,7 +46,7 @@
 </head>
 <body>
 
-    <div id="status">Connexion au broker de secours...</div>
+    <div id="status">Initialisation PeerJS...</div>
     <video id="remote-video" autoplay playsinline></video>
     <div id="input-overlay" tabindex="0"></div>
 
@@ -56,68 +57,46 @@
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        // Utilisation du broker Mosquitto via WebSocket sécurisé (très stable pour GitHub Pages)
-        const clientId = "web_client_" + Math.random().toString(16).substr(2, 8);
-        const client = mqtt.connect('wss://test.mosquitto.org:8081/mqtt', {
-            clientId: clientId
-        });
+        const TARGET_PEER_ID = "monpc_chrome_stream_unique_123";
 
+        // Initialisation de PeerJS sur le cloud public gratuit
+        const peer = new Peer();
+        let conn = null;
         let pc = null;
 
-        client.on('connect', () => {
-            statusDiv.innerText = "Connecté ! Établissement du flux P2P...";
-            client.subscribe("monpc/webrtc/signal", (err) => {
-                if (!err) {
-                    startWebRTC();
-                }
-            });
+        peer.on('open', (id) => {
+            statusDiv.innerText = "Connecté à PeerJS. Connexion au PC...";
+            connectToPC();
         });
 
-        client.on('error', (err) => {
-            console.error("Erreur MQTT :", err);
-            statusDiv.innerText = "Erreur de connexion WebSocket (Vérifiez la console)";
+        peer.on('error', (err) => {
+            console.error("Erreur PeerJS:", err);
+            statusDiv.innerText = "Erreur de connexion P2P";
         });
 
-        client.on('message', async (topic, payload) => {
-            if (topic === "monpc/webrtc/signal") {
-                try {
-                    const data = JSON.parse(payload.toString());
-                    if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
-                        await pc.setRemoteDescription(new RTCSessionDescription(data));
-                        statusDiv.innerText = "Flux P2P actif !";
-                        setTimeout(() => statusDiv.style.display = 'none', 1500);
-                    }
-                } catch (e) {
-                    console.error("Erreur traitement signal :", e);
-                }
-            }
-        });
+        function connectToPC() {
+            // Création d'une connexion WebRTC avec le PC cible
+            const call = peer.call(TARGET_PEER_ID, new MediaStream()); // Signal d'appel vidéo
+            
+            // Établissement du DataChannel pour envoyer les clics/clavier instantanément
+            conn = peer.connect(TARGET_PEER_ID);
 
-        async function startWebRTC() {
-            pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            conn.on('open', () => {
+                statusDiv.innerText = "Canal de contrôle établi !";
             });
 
-            pc.ontrack = (event) => {
-                videoElement.srcObject = event.streams[0];
+            // Réception du flux vidéo du PC
+            call.on('stream', (remoteStream) => {
+                videoElement.srcObject = remoteStream;
                 statusDiv.style.display = 'none';
-            };
-
-            const offer = await pc.createOffer({
-                offerToReceiveVideo: true,
-                offerToReceiveAudio: false
             });
-            await pc.setLocalDescription(offer);
-
-            client.publish("monpc/webrtc/signal", JSON.stringify({
-                type: offer.type,
-                sdp: offer.sdp
-            }));
         }
 
+        // --- Envoi des commandes (Souris / Clavier) via le canal P2P direct ---
         function sendCommand(actionData) {
-            if (!client.connected) return;
-            client.publish("monpc/chrome/commandes", JSON.stringify(actionData));
+            if (conn && conn.open) {
+                conn.send(JSON.stringify(actionData));
+            }
         }
 
         overlay.addEventListener('click', (e) => {
