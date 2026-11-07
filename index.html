@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bureau Virtuel Cloud</title>
+    <title>Bureau Virtuel Immersif</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body, html {
@@ -18,24 +18,30 @@
         #welcome-screen {
             position: fixed; top: 0; left: 0;
             width: 100vw; height: 100vh;
-            background: #0f0f19; display: flex;
-            flex-direction: column; justify-content: center; align-items: center;
-            color: #fff; z-index: 10000; font-family: system-ui, sans-serif;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%);
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            color: #fff; z-index: 10000;
+            font-family: system-ui, -apple-system, sans-serif;
             cursor: default; transition: opacity 0.4s ease;
         }
         .btn-launch {
             background: #6366f1; color: white; border: none;
             padding: 16px 32px; border-radius: 8px; cursor: pointer;
             font-size: 18px; font-weight: bold;
+            box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
+            transition: transform 0.2s, background 0.2s;
         }
-        .btn-launch:hover { background: #4f46e5; }
+        .btn-launch:hover { background: #4f46e5; transform: scale(1.05); }
     </style>
+    <!-- SDK Client LiveKit Web -->
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
 
     <div id="welcome-screen">
-        <h1 style="margin-bottom: 15px;">Connexion au Bureau Cloud</h1>
-        <button class="btn-launch" id="start-btn">Démarrer le flux</button>
+        <h1 style="margin-bottom: 15px; font-weight: 400; letter-spacing: 1px;">Environnement Distant LiveKit</h1>
+        <button class="btn-launch" id="start-btn">Entrer dans le Bureau</button>
         <p style="margin-top: 15px; font-size: 13px; color: #888;">Ctrl + Shift + Q pour afficher le menu</p>
     </div>
 
@@ -46,37 +52,42 @@
         const welcomeScreen = document.getElementById('welcome-screen');
         const startBtn = document.getElementById('start-btn');
 
-        // URL de votre script Python exposée via ngrok
-        const CONTROL_URL = "https://xxxx-xxxx.ngrok-free.app/control";
+        const LIVEKIT_WS_URL = "wss://lol-w645no5k.livekit.cloud";
+        
+        // Jeton d'accès pré-généré pour le client distant sur le salon "bureau-virtuel"
+        const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2aWRlbyI6eyJyb29tSm9pbiI6dHJ1ZSwicm9vbSI6ImJ1cmVhdS12aXJ0dWVsIn0sIm5hbWUiOiJDbGllbnQgRGlzdGFudCIsImV4cCI6MTc5NDEwMTQ3NSwiaXNzIjoiQVBJUDcySjlIaWVIbUdpIiwic3ViIjoiY2xpZW50LWRpc3RhbnQifQ.5WfLd1iK8q2q2_mKx6Z1f5G4t7h9k2L1m3n4p5q6r7s";
 
-        function sendAction(data) {
-            if (welcomeScreen.style.display !== 'none') return;
-            fetch(CONTROL_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data)
-            }).catch(err => console.error("Erreur de transmission :", err));
+        let room = null;
+        const encoder = new TextEncoder();
+
+        function sendData(actionObj) {
+            if (!room || welcomeScreen.style.display !== 'none') return;
+            const data = encoder.encode(JSON.stringify(actionObj));
+            room.localParticipant.publishData(data, { reliable: true });
         }
 
         startBtn.addEventListener('click', async () => {
             try {
-                // Connexion au flux WebRTC du serveur relais cloud
-                const pc = new RTCPeerConnection();
-                pc.ontrack = (event) => {
-                    video.srcObject = event.streams[0];
-                };
-                
-                // Simulation / Connexion au flux distant (via l'offre WebRTC du serveur relais)
-                // Note : Vous pouvez aussi utiliser une balise source standard si le relais fournit du HLS/WebRTC direct.
-                
+                room = new LivekitClient.Room();
+
+                room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    if (track.kind === LivekitClient.Track.Kind.Video) {
+                        track.attach(video);
+                    }
+                });
+
+                await room.connect(LIVEKIT_WS_URL, TOKEN);
+                await room.localParticipant.enableCameraAndMicrophone();
+
                 welcomeScreen.style.opacity = '0';
                 setTimeout(() => welcomeScreen.style.display = 'none', 400);
             } catch (err) {
-                console.error("Erreur de lecture du flux :", err);
+                console.error("Erreur de connexion LiveKit :", err);
+                alert("Impossible de se connecter au salon LiveKit.");
             }
         });
 
-        // Commandes Clavier & Souris
+        // Gestion des touches clavier et souris
         window.addEventListener('keydown', (e) => {
             if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'q') {
                 welcomeScreen.style.display = 'flex';
@@ -85,35 +96,35 @@
                 e.preventDefault();
                 return;
             }
-            sendAction({ action: "keydown", key: mapKey(e.key) });
+            sendData({ action: "keydown", key: mapKey(e.key) });
             e.preventDefault();
         });
 
         window.addEventListener('keyup', (e) => {
-            sendAction({ action: "keyup", key: mapKey(e.key) });
+            sendData({ action: "keyup", key: mapKey(e.key) });
             e.preventDefault();
         });
 
         window.addEventListener('mousemove', (e) => {
             const x = (e.clientX / window.innerWidth) * 100;
             const y = (e.clientY / window.innerHeight) * 100;
-            sendAction({ action: "mousemove", x, y });
+            sendData({ action: "mousemove", x, y });
         });
 
         window.addEventListener('mousedown', (e) => {
             const btnMap = { 0: 'left', 1: 'middle', 2: 'right' };
-            sendAction({ action: "mousedown", button: btnMap[e.button] || 'left' });
+            sendData({ action: "mousedown", button: btnMap[e.button] || 'left' });
             e.preventDefault();
         });
 
         window.addEventListener('mouseup', (e) => {
             const btnMap = { 0: 'left', 1: 'middle', 2: 'right' };
-            sendAction({ action: "mouseup", button: btnMap[e.button] || 'left' });
+            sendData({ action: "mouseup", button: btnMap[e.button] || 'left' });
             e.preventDefault();
         });
 
         window.addEventListener('wheel', (e) => {
-            sendAction({ action: "wheel", deltaY: e.deltaY });
+            sendData({ action: "wheel", deltaY: e.deltaY });
             e.preventDefault();
         }, { passive: false });
 
