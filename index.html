@@ -1,31 +1,145 @@
-<video id="remote-video" autoplay playsinline controls></video>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Stream & Contrôle - Direct</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        /* Lecteur vidéo plein écran sans aucune surcouche */
+        #remote-video {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: contain;
+            z-index: 1;
+        }
+        /* Calque transparent pour capturer les clics et le clavier */
+        #input-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 2;
+            cursor: default;
+        }
+    </style>
+</head>
+<body>
 
-<script>
-  // WHEP client minimaliste pour lire le flux MediaMTX
-  async function startStream() {
-    const video = document.getElementById('remote-video');
-    const pc = new RTCPeerConnection();
+    <!-- Flux vidéo WHEP (MediaMTX) -->
+    <video id="remote-video" autoplay playsinline muted></video>
 
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+    <!-- Calque d'interaction -->
+    <div id="input-overlay" tabindex="0"></div>
 
-    pc.ontrack = (event) => {
-      video.srcObject = event.streams[0];
-    };
+    <script>
+        // --- 1. LECTURE VIDÉO WEBTRC (WHEP) ---
+        async function startWHEPStream() {
+            const video = document.getElementById('remote-video');
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: 'recvonly' });
 
-    // URL de votre serveur MediaMTX (ex: hébergé sur un VPS gratuit ou Fly.io/Render)
-    const response = await fetch('https://votre-serveur-mediamtx.com/mystream/whep', {
-      method: 'POST',
-      body: offer.sdp,
-      headers: { 'Content-Type': 'application/sdp' }
-    });
+            pc.ontrack = (event) => {
+                video.srcObject = event.streams[0];
+            };
 
-    const answerSdp = await response.text();
-    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-  }
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
 
-  startStream();
-</script>
+            // Remplacez cette URL par l'adresse de votre serveur MediaMTX (ex: Fly.io, Render ou VPS)
+            try {
+                const response = await fetch('https://votre-serveur-mediamtx.com/mystream/whep', {
+                    method: 'POST',
+                    body: offer.sdp,
+                    headers: { 'Content-Type': 'application/sdp' }
+                });
+
+                const answerSdp = await response.text();
+                await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+            } catch (err) {
+                console.error("Erreur de connexion au flux vidéo :", err);
+            }
+        }
+
+        startWHEPStream();
+
+        // --- 2. CONTRÔLE MQTT (WebSocket Natif) ---
+        const overlay = document.getElementById('input-overlay');
+        overlay.focus();
+        document.addEventListener('click', () => {
+            overlay.focus();
+            // Active l'audio de la vidéo au premier clic utilisateur (règle des navigateurs)
+            const vid = document.getElementById('remote-video');
+            if (vid.muted) vid.muted = false;
+        });
+
+        const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
+        let isConnected = false;
+
+        ws.onopen = () => {
+            console.log("Connecté au broker MQTT !");
+            const connectPacket = new Uint8Array([
+                0x10, 0x0c, 0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04, 0x02, 0x00, 0x3c, 0x00, 0x00
+            ]);
+            ws.send(connectPacket);
+            isConnected = true;
+        };
+
+        function sendCommand(actionData) {
+            if (!isConnected) return;
+            const topic = "monpc/chrome/commandes";
+            const payload = JSON.stringify(actionData);
+
+            const topicBytes = new TextEncoder().encode(topic);
+            const payloadBytes = new TextEncoder().encode(payload);
+            const remainingLength = 2 + topicBytes.length + payloadBytes.length;
+            
+            let header = [0x30, remainingLength];
+            let packet = new Uint8Array(header.length + 2 + topicBytes.length + payloadBytes.length);
+            
+            packet.set(header, 0);
+            packet[2] = (topicBytes.length >> 8) & 0xFF;
+            packet[3] = topicBytes.length & 0xFF;
+            packet.set(topicBytes, 4);
+            packet.set(payloadBytes, 4 + topicBytes.length);
+
+            ws.send(packet);
+        }
+
+        // Clics de souris en pourcentages
+        overlay.addEventListener('click', (e) => {
+            const rect = overlay.getBoundingClientRect();
+            const xPercent = (e.clientX - rect.left) / rect.width;
+            const yPercent = (e.clientY - rect.top) / rect.height;
+            sendCommand({ action: 'click', x: xPercent, y: yPercent });
+        });
+
+        // Molette (Scroll)
+        window.addEventListener('wheel', (e) => {
+            sendCommand({ action: 'scroll', deltaY: e.deltaY });
+            e.preventDefault();
+        }, { passive: false });
+
+        // Clavier
+        window.addEventListener('keydown', (e) => {
+            if (e.key.length === 1 || ["Backspace", "Enter", "Space", "Tab"].includes(e.key)) {
+                sendCommand({ action: 'keypress', key: e.key });
+                e.preventDefault();
+            }
+        });
+    </script>
+</body>
+</html>
