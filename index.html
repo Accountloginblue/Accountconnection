@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <title>Stream & Contrôle - TestWebsocket</title>
-    <!-- Importation du script officiel du lecteur Twitch -->
     <script src="https://player.twitch.tv/js/embed/v1.js"></script>
     <style>
         html, body {
@@ -17,55 +16,86 @@
             justify-content: center;
             align-items: center;
         }
-        /* Conteneur vidéo plein écran */
         #twitch-embed {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
             z-index: 1;
         }
-        /* Calque transparent invisible par-dessus pour intercepter la souris et le clavier */
+        /* Écran de démarrage pour forcer l'activation du son/vidéo par le navigateur */
+        #play-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 3;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            cursor: pointer;
+        }
+        #play-button {
+            padding: 15px 30px;
+            font-size: 20px;
+            background: #9146FF;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-top: 15px;
+        }
         #input-overlay {
             position: absolute;
             top: 0; left: 0;
             width: 100%; height: 100%;
             z-index: 2;
             cursor: default;
+            display: none; /* Activé après le clic de lancement */
         }
     </style>
 </head>
 <body>
 
-    <!-- Emplacement où le lecteur Twitch va s'injecter proprement -->
     <div id="twitch-embed"></div>
 
-    <!-- Calque d'interaction -->
+    <!-- Écran de verrouillage initial requis par les navigateurs pour lancer le flux -->
+    <div id="play-overlay">
+        <h2>Flux prêt pour TestWebsocket</h2>
+        <p>Cliquez pour lancer le stream et activer le contrôle distant</p>
+        <button id="play-button">Lancer le Stream</button>
+    </div>
+
     <div id="input-overlay" tabindex="0"></div>
 
     <script>
-        // 1. Initialisation du lecteur Twitch via l'API officielle
-        // Cela permet de forcer la lecture automatique (autoplay) et de masquer les éléments superflus.
         const options = {
             width: "100%",
             height: "100%",
             channel: "testwesocket",
             parent: ["accountloginblue.github.io", "localhost"],
             autoplay: true,
-            muted: false // Mettez true si le navigateur bloque l'audio au lancement
+            muted: true // Muet par défaut pour respecter les règles d'autoplay du navigateur
         };
         const player = new Twitch.Player("twitch-embed", options);
 
-        // Forcer le mode plein écran et masquer l'interface dès que le lecteur est prêt
-        player.addEventListener(Twitch.Player.READY, () => {
+        const playOverlay = document.getElementById('play-overlay');
+        const playButton = document.getElementById('play-button');
+        const inputOverlay = document.getElementById('input-overlay');
+
+        // Au clic sur le bouton, on active le son, on masque l'écran de démarrage et on active le contrôle
+        playButton.addEventListener('click', () => {
             player.setMuted(false);
-            // Si le navigateur bloque l'autoplay avec le son, Twitch gère un mode muet automatique de secours
+            player.play();
+            playOverlay.style.display = 'none';
+            inputOverlay.style.display = 'block';
+            inputOverlay.focus();
         });
 
-        // 2. Gestion du contrôle MQTT via WebSocket natif
-        const overlay = document.getElementById('input-overlay');
-        overlay.focus();
-        document.addEventListener('click', () => overlay.focus());
-
+        // Connexion MQTT WebSocket natif
         const ws = new WebSocket('wss://broker.hivemq.com:8000/mqtt', ['mqttv3.1']);
         let isConnected = false;
 
@@ -99,9 +129,8 @@
             ws.send(packet);
         }
 
-        // Transmission des clics, du scroll et du clavier
-        overlay.addEventListener('click', (e) => {
-            const rect = overlay.getBoundingClientRect();
+        inputOverlay.addEventListener('click', (e) => {
+            const rect = inputOverlay.getBoundingClientRect();
             const xPercent = (e.clientX - rect.left) / rect.width;
             const yPercent = (e.clientY - rect.top) / rect.height;
             sendCommand({ action: 'click', x: xPercent, y: yPercent });
