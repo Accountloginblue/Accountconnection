@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>Stream P2P Instantané</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Utilisation de la bibliothèque MQTT officielle stable -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.37.0/mqtt.min.js"></script>
     <style>
         html, body {
             margin: 0;
@@ -40,25 +41,55 @@
         overlay.focus();
         document.addEventListener('click', () => overlay.focus());
 
-        const TARGET_PEER_ID = "monpc_chrome_stream_unique_123";
-        const peer = new Peer();
-        let conn = null;
+        // Connexion au broker WebSocket sécurisé
+        const client = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+        let pc = null;
 
-        peer.on('open', () => {
-            // Lancement immédiat dès l'ouverture de la page
-            const call = peer.call(TARGET_PEER_ID, new MediaStream());
-            
-            call.on('stream', (remoteStream) => {
-                videoElement.srcObject = remoteStream;
-            });
-
-            conn = peer.connect(TARGET_PEER_ID);
+        client.on('connect', () => {
+            console.log("Connecté au broker MQTT. Lancement WebRTC...");
+            client.subscribe("monpc/webrtc/signal");
+            startWebRTC();
         });
 
-        function sendCommand(actionData) {
-            if (conn && conn.open) {
-                conn.send(JSON.stringify(actionData));
+        async function startWebRTC() {
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            pc.ontrack = (event) => {
+                videoElement.srcObject = event.streams[0];
+            };
+
+            const offer = await pc.createOffer({
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: false
+            });
+            await pc.setLocalDescription(offer);
+
+            // Envoi de l'offre au script Python
+            client.publish("monpc/webrtc/signal", JSON.stringify({
+                type: offer.type,
+                sdp: offer.sdp
+            }));
+        }
+
+        // Réception de la réponse du script Python
+        client.on('message', async (topic, payload) => {
+            if (topic === "monpc/webrtc/signal") {
+                try {
+                    const data = JSON.parse(payload.toString());
+                    if (data.type === "answer" && pc && pc.signalingState === "have-local-offer") {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data));
+                        console.log("Flux vidéo actif !");
+                    }
+                } catch (e) {}
             }
+        });
+
+        // Envoi des commandes souris / clavier
+        function sendCommand(actionData) {
+            if (!client.connected) return;
+            client.publish("monpc/chrome/commandes", JSON.stringify(actionData));
         }
 
         overlay.addEventListener('click', (e) => {
